@@ -7,6 +7,7 @@ import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as sqs from 'aws-cdk-lib/aws-sqs';
 import * as sns_subs from 'aws-cdk-lib/aws-sns-subscriptions';
 import * as iam from 'aws-cdk-lib/aws-iam';
+import * as lambda_event_sources from 'aws-cdk-lib/aws-lambda-event-sources';
 
 export class PhotoLibraryAppStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {
@@ -63,5 +64,21 @@ export class PhotoLibraryAppStack extends cdk.Stack {
 
     // SNS Topic subscription to SQS
     topic.addSubscription(new sns_subs.SqsSubscription(queue));
+
+    // Lambda to remove invalid images
+    const removeImageLambda = new lambda.Function(this, 'RemoveImageLambda', {
+      runtime: lambda.Runtime.NODEJS_18_X,
+      handler: 'remove-image.handler',
+      code: lambda.Code.fromAsset('lambda'),
+      environment: {
+        BUCKET_NAME: imageBucket.bucketName,
+      }
+    });
+
+    // Grant permission to delete from S3
+    imageBucket.grantDelete(removeImageLambda);
+
+    // Configure Lambda to poll messages from DLQ
+    removeImageLambda.addEventSource(new lambda_event_sources.SqsEventSource(deadLetterQueue));
   }
 }
