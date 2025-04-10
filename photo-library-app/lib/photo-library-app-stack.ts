@@ -27,8 +27,10 @@ export class PhotoLibraryAppStack extends cdk.Stack {
     // Creating a DynamoDB Table
     const imageTable = new dynamodb.Table(this, 'ImageTable', {
       partitionKey: { name: 'id', type: dynamodb.AttributeType.STRING },
-      removalPolicy: cdk.RemovalPolicy.DESTROY
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+      stream: dynamodb.StreamViewType.NEW_IMAGE,
     });
+
 
     // Dead-Letter Queue (DLQ)
     const deadLetterQueue = new sqs.Queue(this, 'DeadLetterQueue');
