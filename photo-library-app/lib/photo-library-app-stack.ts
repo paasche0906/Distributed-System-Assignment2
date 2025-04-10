@@ -119,7 +119,9 @@ export class PhotoLibraryAppStack extends cdk.Stack {
     // Subscribe UpdateStatusLambda to SNS topic with filter
     topic.addSubscription(new sns_subs.LambdaSubscription(updateStatusLambda, {
       filterPolicy: {
-        metadata_type: sns.SubscriptionFilter.exists(false)  // 没有 metadata_type 的消息
+        metadata_type: sns.SubscriptionFilter.stringFilter({
+          denylist: ['Caption', 'Date', 'Name'],
+        }),
       }
     }));
 
