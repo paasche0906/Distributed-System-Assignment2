@@ -102,5 +102,26 @@ export class PhotoLibraryAppStack extends cdk.Stack {
         })
       }
     }));
+
+    // Lambda for updating status
+    const updateStatusLambda = new lambda.Function(this, 'UpdateStatusLambda', {
+      runtime: lambda.Runtime.NODEJS_18_X,
+      handler: 'update-status.handler',
+      code: lambda.Code.fromAsset('lambda'),
+      environment: {
+        TABLE_NAME: imageTable.tableName,
+      }
+    });
+
+    // Grant permission to update table
+    imageTable.grantWriteData(updateStatusLambda);
+
+    // Subscribe UpdateStatusLambda to SNS topic with filter
+    topic.addSubscription(new sns_subs.LambdaSubscription(updateStatusLambda, {
+      filterPolicy: {
+        metadata_type: sns.SubscriptionFilter.exists(false)  // 没有 metadata_type 的消息
+      }
+    }));
+
   }
 }
