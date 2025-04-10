@@ -8,6 +8,8 @@ import * as sqs from 'aws-cdk-lib/aws-sqs';
 import * as sns_subs from 'aws-cdk-lib/aws-sns-subscriptions';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as lambda_event_sources from 'aws-cdk-lib/aws-lambda-event-sources';
+import { SES_EMAIL_FROM, SES_EMAIL_TO, SES_REGION } from '../env';
+
 
 export class PhotoLibraryAppStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {
@@ -125,6 +127,31 @@ export class PhotoLibraryAppStack extends cdk.Stack {
           denylist: ['Caption', 'Date', 'Name'],
         }),
       }
+    }));
+
+    // Lambda for status update mailer
+    const statusUpdateMailerLambda = new lambda.Function(this, 'StatusUpdateMailerLambda', {
+      runtime: lambda.Runtime.NODEJS_18_X,
+      handler: 'status-update-mailer.handler',
+      code: lambda.Code.fromAsset('lambda'),
+      environment: {
+        FROM_EMAIL: SES_EMAIL_FROM,
+        TO_EMAIL: SES_EMAIL_TO,
+        SES_REGION: SES_REGION,
+        TABLE_NAME: imageTable.tableName,
+      }
+    });
+
+
+    // Grant permissions
+    statusUpdateMailerLambda.addEventSource(new lambda_event_sources.DynamoEventSource(imageTable, {
+      startingPosition: lambda.StartingPosition.TRIM_HORIZON,
+      batchSize: 5,
+    }));
+
+    statusUpdateMailerLambda.addToRolePolicy(new iam.PolicyStatement({
+      actions: ['ses:SendEmail', 'ses:SendRawEmail'],
+      resources: ['*'],
     }));
 
   }
