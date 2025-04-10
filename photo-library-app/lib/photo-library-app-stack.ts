@@ -80,5 +80,27 @@ export class PhotoLibraryAppStack extends cdk.Stack {
 
     // Configure Lambda to poll messages from DLQ
     removeImageLambda.addEventSource(new lambda_event_sources.SqsEventSource(deadLetterQueue));
+
+    // Lambda for adding metadata
+    const addMetadataLambda = new lambda.Function(this, 'AddMetadataLambda', {
+      runtime: lambda.Runtime.NODEJS_18_X,
+      handler: 'add-metadata.handler',
+      code: lambda.Code.fromAsset('lambda'),
+      environment: {
+        TABLE_NAME: imageTable.tableName,
+      }
+    });
+
+    //  Grant permission to update table
+    imageTable.grantWriteData(addMetadataLambda);
+
+    // Subscribe AddMetadataLambda to SNS topic with filter
+    topic.addSubscription(new sns_subs.LambdaSubscription(addMetadataLambda, {
+      filterPolicy: {
+        metadata_type: sns.SubscriptionFilter.stringFilter({
+          allowlist: ['Caption', 'Date', 'Name'],
+        })
+      }
+    }));
   }
 }
