@@ -10,15 +10,16 @@ import * as iam from 'aws-cdk-lib/aws-iam';
 import * as lambda_event_sources from 'aws-cdk-lib/aws-lambda-event-sources';
 import { SES_EMAIL_FROM, SES_EMAIL_TO, SES_REGION } from '../env';
 
-
 export class PhotoLibraryAppStack extends cdk.Stack {
+  private imageTopic: sns.Topic;
+
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {
     super(scope, id, props);
 
     // === Base Resources ===
     const imageBucket = this.createS3Bucket();
-    const topic = this.createSnsTopic();
     const imageTable = this.createDynamoTable();
+    this.imageTopic = this.createSnsTopic();
 
     // === Queues ===
     const { queue, deadLetterQueue } = this.createQueues();
@@ -26,8 +27,8 @@ export class PhotoLibraryAppStack extends cdk.Stack {
     // === Lambdas ===
     this.setupLogImageLambda(queue, imageTable);
     this.setupRemoveImageLambda(deadLetterQueue, imageBucket);
-    this.setupAddMetadataLambda(topic, imageTable);
-    this.setupUpdateStatusLambda(topic, imageTable);
+    this.setupAddMetadataLambda(this.imageTopic, imageTable);
+    this.setupUpdateStatusLambda(this.imageTopic, imageTable);
     this.setupStatusUpdateMailerLambda(imageTable);
 
     // Output S3 bucket name
@@ -79,11 +80,10 @@ export class PhotoLibraryAppStack extends cdk.Stack {
     });
 
     imageTable.grantWriteData(fn);
-    fn.addEventSourceMapping('LogImageEventSource', {
-      eventSourceArn: queue.queueArn,
+    fn.addEventSource(new lambda_event_sources.SqsEventSource(queue, {
       batchSize: 1,
-    });
-    queue.grantConsumeMessages(fn);
+    }));
+    this.imageTopic.addSubscription(new sns_subs.SqsSubscription(queue));
   }
 
   private setupRemoveImageLambda(deadLetterQueue: sqs.Queue, bucket: s3.Bucket) {
