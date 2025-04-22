@@ -2,133 +2,109 @@ import * as cdk from 'aws-cdk-lib';
 import { Construct } from 'constructs';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as sns from 'aws-cdk-lib/aws-sns';
+import * as s3n from 'aws-cdk-lib/aws-s3-notifications';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as sqs from 'aws-cdk-lib/aws-sqs';
 import * as sns_subs from 'aws-cdk-lib/aws-sns-subscriptions';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as lambda_event_sources from 'aws-cdk-lib/aws-lambda-event-sources';
-import * as s3n from 'aws-cdk-lib/aws-s3-notifications';
 import { SES_EMAIL_FROM, SES_EMAIL_TO, SES_REGION } from '../env';
-
 
 export class PhotoLibraryAppStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {
     super(scope, id, props);
 
-    // Creating an S3 Bucket
+    // S3 Bucket
     const imageBucket = new s3.Bucket(this, 'ImageBucket', {
       removalPolicy: cdk.RemovalPolicy.DESTROY,
       autoDeleteObjects: true,
     });
 
-    // Create SNS Topic
-    const topic = new sns.Topic(this, 'ImageTopic', {
+    // SNS Topic
+    const snsTopic = new sns.Topic(this, 'ImageTopic', {
       displayName: 'Image Upload and Metadata Topic'
     });
 
+    // S3 triggers SNS on image upload
     imageBucket.addEventNotification(
       s3.EventType.OBJECT_CREATED_PUT,
-      new s3n.SnsDestination(topic)
+      new s3n.SnsDestination(snsTopic)
     );
 
-
-    // Creating a DynamoDB Table
+    // DynamoDB Table
     const imageTable = new dynamodb.Table(this, 'ImageTable', {
       partitionKey: { name: 'id', type: dynamodb.AttributeType.STRING },
       removalPolicy: cdk.RemovalPolicy.DESTROY,
       stream: dynamodb.StreamViewType.NEW_IMAGE,
     });
 
-
-    // Dead-Letter Queue (DLQ)
+    // Dead-Letter Queue
     const deadLetterQueue = new sqs.Queue(this, 'DeadLetterQueue');
 
-    // Main Queue
-    const queue = new sqs.Queue(this, 'MainQueue', {
+    // Main SQS Queue
+    const mainQueue = new sqs.Queue(this, 'MainQueue', {
       deadLetterQueue: {
         maxReceiveCount: 1,
         queue: deadLetterQueue,
       }
     });
 
-    // Lambda for logging images
-    const logImageLambda = new lambda.Function(this, 'LogImageLambda', {
-      runtime: lambda.Runtime.NODEJS_18_X,
-      handler: 'log-image.handler',
-      code: lambda.Code.fromAsset('lambda'),
-      environment: {
-        TABLE_NAME: imageTable.tableName,
-      }
+    // Utility to create basic lambda config
+    const createLambda = (id: string, handlerFile: string, env: Record<string, string>) =>
+      new lambda.Function(this, id, {
+        runtime: lambda.Runtime.NODEJS_18_X,
+        handler: `${handlerFile}.handler`,
+        code: lambda.Code.fromAsset('lambda'),
+        environment: env,
+      });
+
+    // Lambda: Log Image
+    const logImageLambda = createLambda('LogImageLambda', 'log-image', {
+      TABLE_NAME: imageTable.tableName,
     });
 
-    // Grant permissions
-    imageTable.grantWriteData(logImageLambda);
-
-    // Allow Lambda to be triggered by SQS
     logImageLambda.addEventSourceMapping('LogImageEventSource', {
-      eventSourceArn: queue.queueArn,
+      eventSourceArn: mainQueue.queueArn,
       batchSize: 1,
     });
 
-    queue.grantConsumeMessages(logImageLambda);
+    imageTable.grantWriteData(logImageLambda);
+    mainQueue.grantConsumeMessages(logImageLambda);
 
-    // SNS Topic subscription to SQS
-    topic.addSubscription(new sns_subs.SqsSubscription(queue));
+    snsTopic.addSubscription(new sns_subs.SqsSubscription(mainQueue));
 
-    // Lambda to remove invalid images
-    const removeImageLambda = new lambda.Function(this, 'RemoveImageLambda', {
-      runtime: lambda.Runtime.NODEJS_18_X,
-      handler: 'remove-image.handler',
-      code: lambda.Code.fromAsset('lambda'),
-      environment: {
-        BUCKET_NAME: imageBucket.bucketName,
-      }
+    // Lambda: Remove Invalid Image
+    const removeImageLambda = createLambda('RemoveImageLambda', 'remove-image', {
+      BUCKET_NAME: imageBucket.bucketName,
     });
 
-    // Grant permission to delete from S3
+    removeImageLambda.addEventSource(new lambda_event_sources.SqsEventSource(deadLetterQueue));
     imageBucket.grantDelete(removeImageLambda);
 
-    // Configure Lambda to poll messages from DLQ
-    removeImageLambda.addEventSource(new lambda_event_sources.SqsEventSource(deadLetterQueue));
-
-    // Lambda for adding metadata
-    const addMetadataLambda = new lambda.Function(this, 'AddMetadataLambda', {
-      runtime: lambda.Runtime.NODEJS_18_X,
-      handler: 'add-metadata.handler',
-      code: lambda.Code.fromAsset('lambda'),
-      environment: {
-        TABLE_NAME: imageTable.tableName,
-      }
+    // Lambda: Add Metadata
+    const addMetadataLambda = createLambda('AddMetadataLambda', 'add-metadata', {
+      TABLE_NAME: imageTable.tableName,
     });
 
-    //  Grant permission to update table
     imageTable.grantWriteData(addMetadataLambda);
 
-    // Subscribe AddMetadataLambda to SNS topic with filter
-    topic.addSubscription(new sns_subs.LambdaSubscription(addMetadataLambda, {
+    snsTopic.addSubscription(new sns_subs.LambdaSubscription(addMetadataLambda, {
       filterPolicy: {
         metadata_type: sns.SubscriptionFilter.stringFilter({
           allowlist: ['Caption', 'Date', 'Name'],
-        })
+        }),
       }
     }));
 
-    // Lambda for updating status
-    const updateStatusLambda = new lambda.Function(this, 'UpdateStatusLambda', {
-      runtime: lambda.Runtime.NODEJS_18_X,
-      handler: 'update-status.handler',
-      code: lambda.Code.fromAsset('lambda'),
-      environment: {
-        TABLE_NAME: imageTable.tableName,
-      }
+    // Lambda: Update Status
+    const updateStatusLambda = createLambda('UpdateStatusLambda', 'update-status', {
+      TABLE_NAME: imageTable.tableName,
     });
 
-    // Grant permission to update table
     imageTable.grantWriteData(updateStatusLambda);
 
-    // Subscribe UpdateStatusLambda to SNS topic with filter
-    topic.addSubscription(new sns_subs.LambdaSubscription(updateStatusLambda, {
+    snsTopic.addSubscription(new sns_subs.LambdaSubscription(updateStatusLambda, {
       filterPolicy: {
         metadata_type: sns.SubscriptionFilter.stringFilter({
           denylist: ['Caption', 'Date', 'Name'],
@@ -136,21 +112,14 @@ export class PhotoLibraryAppStack extends cdk.Stack {
       }
     }));
 
-    // Lambda for status update mailer
-    const statusUpdateMailerLambda = new lambda.Function(this, 'StatusUpdateMailerLambda', {
-      runtime: lambda.Runtime.NODEJS_18_X,
-      handler: 'status-update-mailer.handler',
-      code: lambda.Code.fromAsset('lambda'),
-      environment: {
-        FROM_EMAIL: SES_EMAIL_FROM,
-        TO_EMAIL: SES_EMAIL_TO,
-        SES_REGION: SES_REGION,
-        TABLE_NAME: imageTable.tableName,
-      }
+    // Lambda: Send SES Email
+    const statusUpdateMailerLambda = createLambda('StatusUpdateMailerLambda', 'status-update-mailer', {
+      FROM_EMAIL: SES_EMAIL_FROM,
+      TO_EMAIL: SES_EMAIL_TO,
+      SES_REGION: SES_REGION,
+      TABLE_NAME: imageTable.tableName,
     });
 
-
-    // Grant permissions
     statusUpdateMailerLambda.addEventSource(new lambda_event_sources.DynamoEventSource(imageTable, {
       startingPosition: lambda.StartingPosition.TRIM_HORIZON,
       batchSize: 5,
@@ -160,6 +129,5 @@ export class PhotoLibraryAppStack extends cdk.Stack {
       actions: ['ses:SendEmail', 'ses:SendRawEmail'],
       resources: ['*'],
     }));
-
   }
 }
