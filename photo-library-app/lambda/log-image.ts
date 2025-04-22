@@ -19,9 +19,7 @@ export const handler = async (event: SQSEvent): Promise<void> => {
 
     await ddb.put({
       TableName: tableName,
-      Item: {
-        id: fileName
-      }
+      Item: { id: fileName }
     }).promise();
 
     console.log(`Image ${fileName} logged successfully.`);
