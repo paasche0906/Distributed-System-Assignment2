@@ -35,3 +35,4 @@ __Feature:__
 ### Notes (Optional)
 
 [Any additional information about your solution you wish to draw attention to.]
+aws s3 cp ./photo-library-app/testfiles/arch.jpg s3://photolibraryappstack-imagebucket97210811-64gnk55paeck
