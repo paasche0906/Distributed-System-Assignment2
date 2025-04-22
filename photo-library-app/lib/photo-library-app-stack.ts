@@ -15,38 +15,61 @@ export class PhotoLibraryAppStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {
     super(scope, id, props);
 
-    // Creating an S3 Bucket
-    const imageBucket = new s3.Bucket(this, 'ImageBucket', {
+    // === Base Resources ===
+    const imageBucket = this.createS3Bucket();
+    const topic = this.createSnsTopic();
+    const imageTable = this.createDynamoTable();
+
+    // === Queues ===
+    const { queue, deadLetterQueue } = this.createQueues();
+
+    // === Lambdas ===
+    this.setupLogImageLambda(queue, imageTable);
+    this.setupRemoveImageLambda(deadLetterQueue, imageBucket);
+    this.setupAddMetadataLambda(topic, imageTable);
+    this.setupUpdateStatusLambda(topic, imageTable);
+    this.setupStatusUpdateMailerLambda(imageTable);
+
+    // Output S3 bucket name
+    new cdk.CfnOutput(this, 'ImageBucketName', {
+      value: imageBucket.bucketName,
+    });
+  }
+
+  private createS3Bucket(): s3.Bucket {
+    return new s3.Bucket(this, 'ImageBucket', {
       removalPolicy: cdk.RemovalPolicy.DESTROY,
       autoDeleteObjects: true,
     });
+  }
 
-    // Create SNS Topic
-    const topic = new sns.Topic(this, 'ImageTopic', {
+  private createSnsTopic(): sns.Topic {
+    return new sns.Topic(this, 'ImageTopic', {
       displayName: 'Image Upload and Metadata Topic'
     });
+  }
 
-    // Creating a DynamoDB Table
-    const imageTable = new dynamodb.Table(this, 'ImageTable', {
+  private createDynamoTable(): dynamodb.Table {
+    return new dynamodb.Table(this, 'ImageTable', {
       partitionKey: { name: 'id', type: dynamodb.AttributeType.STRING },
       removalPolicy: cdk.RemovalPolicy.DESTROY,
       stream: dynamodb.StreamViewType.NEW_IMAGE,
     });
+  }
 
-
-    // Dead-Letter Queue (DLQ)
+  private createQueues() {
     const deadLetterQueue = new sqs.Queue(this, 'DeadLetterQueue');
-
-    // Main Queue
     const queue = new sqs.Queue(this, 'MainQueue', {
       deadLetterQueue: {
         maxReceiveCount: 1,
         queue: deadLetterQueue,
       }
     });
+    return { queue, deadLetterQueue };
+  }
 
-    // Lambda for logging images
-    const logImageLambda = new lambda.Function(this, 'LogImageLambda', {
+  private setupLogImageLambda(queue: sqs.Queue, imageTable: dynamodb.Table) {
+    const fn = new lambda.Function(this, 'LogImageLambda', {
       runtime: lambda.Runtime.NODEJS_18_X,
       handler: 'log-image.handler',
       code: lambda.Code.fromAsset('lambda'),
@@ -55,38 +78,30 @@ export class PhotoLibraryAppStack extends cdk.Stack {
       }
     });
 
-    // Grant permissions
-    imageTable.grantWriteData(logImageLambda);
-
-    // Allow Lambda to be triggered by SQS
-    logImageLambda.addEventSourceMapping('LogImageEventSource', {
+    imageTable.grantWriteData(fn);
+    fn.addEventSourceMapping('LogImageEventSource', {
       eventSourceArn: queue.queueArn,
       batchSize: 1,
     });
+    queue.grantConsumeMessages(fn);
+  }
 
-    queue.grantConsumeMessages(logImageLambda);
-
-    // SNS Topic subscription to SQS
-    topic.addSubscription(new sns_subs.SqsSubscription(queue));
-
-    // Lambda to remove invalid images
-    const removeImageLambda = new lambda.Function(this, 'RemoveImageLambda', {
+  private setupRemoveImageLambda(deadLetterQueue: sqs.Queue, bucket: s3.Bucket) {
+    const fn = new lambda.Function(this, 'RemoveImageLambda', {
       runtime: lambda.Runtime.NODEJS_18_X,
       handler: 'remove-image.handler',
       code: lambda.Code.fromAsset('lambda'),
       environment: {
-        BUCKET_NAME: imageBucket.bucketName,
+        BUCKET_NAME: bucket.bucketName,
       }
     });
 
-    // Grant permission to delete from S3
-    imageBucket.grantDelete(removeImageLambda);
+    bucket.grantDelete(fn);
+    fn.addEventSource(new lambda_event_sources.SqsEventSource(deadLetterQueue));
+  }
 
-    // Configure Lambda to poll messages from DLQ
-    removeImageLambda.addEventSource(new lambda_event_sources.SqsEventSource(deadLetterQueue));
-
-    // Lambda for adding metadata
-    const addMetadataLambda = new lambda.Function(this, 'AddMetadataLambda', {
+  private setupAddMetadataLambda(topic: sns.Topic, imageTable: dynamodb.Table) {
+    const fn = new lambda.Function(this, 'AddMetadataLambda', {
       runtime: lambda.Runtime.NODEJS_18_X,
       handler: 'add-metadata.handler',
       code: lambda.Code.fromAsset('lambda'),
@@ -95,20 +110,18 @@ export class PhotoLibraryAppStack extends cdk.Stack {
       }
     });
 
-    //  Grant permission to update table
-    imageTable.grantWriteData(addMetadataLambda);
-
-    // Subscribe AddMetadataLambda to SNS topic with filter
-    topic.addSubscription(new sns_subs.LambdaSubscription(addMetadataLambda, {
+    imageTable.grantWriteData(fn);
+    topic.addSubscription(new sns_subs.LambdaSubscription(fn, {
       filterPolicy: {
         metadata_type: sns.SubscriptionFilter.stringFilter({
           allowlist: ['Caption', 'Date', 'Name'],
         })
       }
     }));
+  }
 
-    // Lambda for updating status
-    const updateStatusLambda = new lambda.Function(this, 'UpdateStatusLambda', {
+  private setupUpdateStatusLambda(topic: sns.Topic, imageTable: dynamodb.Table) {
+    const fn = new lambda.Function(this, 'UpdateStatusLambda', {
       runtime: lambda.Runtime.NODEJS_18_X,
       handler: 'update-status.handler',
       code: lambda.Code.fromAsset('lambda'),
@@ -117,20 +130,18 @@ export class PhotoLibraryAppStack extends cdk.Stack {
       }
     });
 
-    // Grant permission to update table
-    imageTable.grantWriteData(updateStatusLambda);
-
-    // Subscribe UpdateStatusLambda to SNS topic with filter
-    topic.addSubscription(new sns_subs.LambdaSubscription(updateStatusLambda, {
+    imageTable.grantWriteData(fn);
+    topic.addSubscription(new sns_subs.LambdaSubscription(fn, {
       filterPolicy: {
         metadata_type: sns.SubscriptionFilter.stringFilter({
           denylist: ['Caption', 'Date', 'Name'],
         }),
       }
     }));
+  }
 
-    // Lambda for status update mailer
-    const statusUpdateMailerLambda = new lambda.Function(this, 'StatusUpdateMailerLambda', {
+  private setupStatusUpdateMailerLambda(imageTable: dynamodb.Table) {
+    const fn = new lambda.Function(this, 'StatusUpdateMailerLambda', {
       runtime: lambda.Runtime.NODEJS_18_X,
       handler: 'status-update-mailer.handler',
       code: lambda.Code.fromAsset('lambda'),
@@ -142,17 +153,14 @@ export class PhotoLibraryAppStack extends cdk.Stack {
       }
     });
 
-
-    // Grant permissions
-    statusUpdateMailerLambda.addEventSource(new lambda_event_sources.DynamoEventSource(imageTable, {
+    fn.addEventSource(new lambda_event_sources.DynamoEventSource(imageTable, {
       startingPosition: lambda.StartingPosition.TRIM_HORIZON,
       batchSize: 5,
     }));
 
-    statusUpdateMailerLambda.addToRolePolicy(new iam.PolicyStatement({
+    fn.addToRolePolicy(new iam.PolicyStatement({
       actions: ['ses:SendEmail', 'ses:SendRawEmail'],
       resources: ['*'],
     }));
-
   }
 }
