@@ -49,3 +49,14 @@ $ aws sns publish --topic-arn "arn:aws:sns:eu-west-1:585768165910:PhotoLibraryAp
 | Status message   | `"status"`   | `UpdateStatusFunction` only   |
 | Notify message   | `"notify"`   | `SendStatusEmailFunction` only |
 
+```bash
+$ aws sns publish --topic-arn "arn:aws:sns:eu-west-1:585768165910:PhotoLibraryAppStack-MetadataTopicA4CB8975-WP94tVA2H2uT" --message file://metadata-message.json --message-attributes file://metadata-attributes.json
+```
+
+```bash
+$ aws sns publish --topic-arn "arn:aws:sns:eu-west-1:585768165910:PhotoLibraryAppStack-MetadataTopicA4CB8975-WP94tVA2H2uT" --message file://status-message.json --message-attributes file://status-attributes.json
+```
+
+```bash
+$ aws sns publish --topic-arn "arn:aws:sns:eu-west-1:585768165910:PhotoLibraryAppStack-MetadataTopicA4CB8975-WP94tVA2H2uT" --message file://notify-message.json --message-attributes file://notify-attributes.json
+```
