@@ -1,26 +1,35 @@
 import { SQSEvent } from 'aws-lambda';
-import * as AWS from 'aws-sdk';
+import { S3 } from 'aws-sdk';
 
-const s3 = new AWS.S3();
-const bucketName = process.env.BUCKET_NAME!;
+const s3 = new S3();
+const bucketName = process.env.BUCKET_NAME;
+
+if (!bucketName) {
+    throw new Error('BUCKET_NAME environment variable is not set.');
+}
 
 export const handler = async (event: SQSEvent): Promise<void> => {
-    console.log('Processing DLQ event:', JSON.stringify(event, null, 2));
-
     for (const record of event.Records) {
         try {
-            const messageBody = JSON.parse(record.body);
-            const snsMessage = JSON.parse(messageBody.Message);
-            const fileName = snsMessage.Records[0].s3.object.key;
+            const body = JSON.parse(record.body);
+            const s3Record = body?.Records?.[0]?.s3;
+
+            if (!s3Record || !s3Record.object?.key) {
+                console.warn('Missing S3 object key in record:', record.body);
+                continue;
+            }
+
+            const rawKey = s3Record.object.key;
+            const key = decodeURIComponent(rawKey.replace(/\+/g, ' '));
 
             await s3.deleteObject({
                 Bucket: bucketName,
-                Key: fileName,
+                Key: key,
             }).promise();
 
-            console.log(`Deleted invalid file: ${fileName}`);
+            console.log(`Successfully deleted file: ${key}`);
         } catch (error) {
-            console.error('Failed to delete file from S3:', error);
+            console.error(`Failed to process SQS record: ${record.body}`, error);
         }
     }
 };
