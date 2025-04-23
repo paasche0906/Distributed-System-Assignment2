@@ -4,7 +4,7 @@ import { SESClient, SendEmailCommand } from "@aws-sdk/client-ses";
 import { SES_EMAIL_FROM } from "../env";
 
 const ddb = new DynamoDBClient({});
-const ses = new SESClient({});
+const ses = new SESClient({ region: "eu-west-1" });
 
 const tableName = process.env.TABLE_NAME;
 
@@ -19,7 +19,7 @@ export const handler = async (event: SNSEvent): Promise<void> => {
         try {
             const { id, email } = JSON.parse(record.Sns.Message);
             if (!id || !email) {
-                console.warn("⚠️ Missing required fields in SNS message:", record.Sns.Message);
+                console.warn("Missing required fields in SNS message:", record.Sns.Message);
                 continue;
             }
 

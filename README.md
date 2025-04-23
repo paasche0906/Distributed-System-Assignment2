@@ -1,38 +1,49 @@
 # Distributed-System-Assignment2
 ## Distributed Systems - Event-Driven Architecture.
 
-__Name:__ ....your name .....
+__Name:__ Jiacheng Pan
 
 __Demo__: ....URL of YouTube demo ......
 
 This repository contains the implementation of a skeleton design for an application that manages a photo gallery, illustrated below. The app uses an event-driven architecture and is deployed on the AWS platform using the CDK framework for infrastructure provisioning.
 
-![](./images/arch.png)
+![!\[\](./testfiles/arch.png)](photo-library-app/testfiles/arch.jpg)
 
-### Code Status.
-
-[Advice: In this section, state the status of your submission for each feature listed below. The status options are: (1) Completed & Tested; (2) Attempted (i.e. partially works); (3) Not Attempted. Option (1) implies the feature performs the required action (e.g. updates the table) __only when appropriate__, as dictated by the relevant filtering policy described in the specification.]
+### Code Status. 
 
 __Feature:__
 + Photographer:
-  + Log new Images
-  + Metadata updating
-  + Invalid image removal  
-  + Status Update Mailer
+  + Log new Images - Completed & Tested
+  + Metadata updating - Completed & Tested
+  + Invalid image removal - Completed & Tested
+  + Status Update Mailer - Completed & Tested
 + Moderator
-  + Status updating
+  + Status updating - Completed & Tested
+  + Filtering - Completed & Verified via CloudWatch Logs
+  + Messaging - Completed & Triggered downstream functions
 
-]e.g. 
 
-__Feature:__
-+ Photographer:
-  + Log new Images - Completed and Tested.
-  + Metadata updating - Not Attempted
-  + Invalid image removal - Completed and Tested
-  + Status Update Mailer - Attempted.
-+ etc
-
-### Notes (Optional)
-
-[Any additional information about your solution you wish to draw attention to.]
-aws s3 cp ./photo-library-app/testfiles/arch.jpg s3://photolibraryappstack-imagebucket97210811-64gnk55paeck
+### Testing Steps 
+1. Upload Valid Image
+```bash
+$ aws s3 cp ./testfiles/sunflower.jpeg s3://photolibraryappstack-photogallerybucket51200357-tt1imfqtxnoasd
+```
+2. Upload Invalid Image
+```bash
+$ aws s3 cp ./testfiles/arch.jpg s3://photolibraryappstack-photogallerybucket51200357-tt1imfqtxnoasd
+```
+3. Add Metadata
+```bash
+$ aws sns publish --topic-arn "arn:aws:sns:eu-west-1:585768165910:PhotoLibraryAppStack-MetadataTopicA4CB8975-WP94tVA2H2uT" --message-attributes file://attributes.json --message file://message.json
+```
+4. Moderator Updates Status
+```bash
+$ aws sns publish --topic-arn "arn:aws:sns:eu-west-1:585768165910:PhotoLibraryAppStack-MetadataTopicA4CB8975-WP94tVA2H2uT" --message file://status-message.json --message-attributes file://attributes.json
+```
+5. Email Notification Sent
+6. SNS Filtering 
+| Scenario         | Message Type | Triggered Lambda              |
+|------------------|--------------|-------------------------------|
+| Metadata message | `"metadata"` |  `AddMetadataFunction` only |
+| Status message   | `"status"`   |  `UpdateStatusFunction` only |
+| Notify message   | `"notify"`   |  `SendStatusEmailFunction` only |

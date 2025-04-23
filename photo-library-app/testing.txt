@@ -1,0 +1,53 @@
+Date:
+
+messege.json:
+
+{
+  "id": "sunflower.jpeg",
+  "value": "23/04/2025"
+}
+
+attributes.json:
+
+{
+  "metadata_type": {
+    "DataType": "String",
+    "StringValue": "Date"
+  },
+  "messageType": {
+    "DataType": "String",
+    "StringValue": "metadata"
+  }
+}
+
+Name:
+
+messege.json:
+
+{
+  "id": "sunflower.jpeg",
+  "value": "Jiacheng Pan"
+}
+
+
+attributes.json:
+
+{
+  "metadata_type": {
+    "DataType": "String",
+    "StringValue": "Name"
+  },
+  "messageType": {
+    "DataType": "String",
+    "StringValue": "metadata"
+  }
+}
+
+
+{
+    "messageType": {
+      "DataType": "String",
+      "StringValue": "status"
+    }
+  }
+  
