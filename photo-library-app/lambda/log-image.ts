@@ -1,34 +1,42 @@
 import { SQSEvent } from 'aws-lambda';
-import * as AWS from 'aws-sdk';
+import { DynamoDB } from 'aws-sdk';
 
-const ddb = new AWS.DynamoDB.DocumentClient();
-const tableName = process.env.TABLE_NAME!;
+const dynamodb = new DynamoDB.DocumentClient();
+const tableName = process.env.TABLE_NAME;
+
+if (!tableName) {
+  throw new Error('TABLE_NAME environment variable is not defined.');
+}
 
 export const handler = async (event: SQSEvent): Promise<void> => {
-  console.log('Received event:', JSON.stringify(event, null, 2));
+  console.log('Received SQS Event:', JSON.stringify(event, null, 2));
 
   for (const record of event.Records) {
     try {
-      const messageBody = JSON.parse(record.body);
-      const snsMessage = JSON.parse(messageBody.Message);
-      const fileName: string = snsMessage.Records[0].s3.object.key;
-      const normalizedFileName = fileName.toLowerCase();
+      const body = JSON.parse(record.body);
+      const s3Record = body?.Records?.[0]?.s3;
 
-      if (!normalizedFileName.endsWith('.jpeg') && !normalizedFileName.endsWith('.png')) {
-        console.error(`Invalid file type: ${fileName}`);
-        throw new Error('Invalid file type');
+      if (!s3Record || !s3Record.object?.key) {
+        console.warn('S3 record is missing or malformed:', record.body);
+        continue;
       }
 
-      await ddb.put({
+      const rawKey = s3Record.object.key;
+      const key = decodeURIComponent(rawKey.replace(/\+/g, ' '));
+
+      if (!/\.(jpeg|png)$/i.test(key)) {
+        console.warn(`Invalid file type for key: ${key}`);
+        continue;
+      }
+
+      await dynamodb.put({
         TableName: tableName,
-        Item: { id: fileName }
+        Item: { id: key },
       }).promise();
 
-      console.log(`✅ Image ${fileName} logged successfully.`);
-
+      console.log(`✅ Successfully logged image: ${key}`);
     } catch (error) {
-      console.error(`🔥 Error processing message: ${error}`);
-      throw error;
+      console.error('Failed to process record:', record.body, error);
     }
   }
 };
