@@ -1,37 +1,44 @@
 import { SNSEvent } from 'aws-lambda';
-import * as AWS from 'aws-sdk';
+import { DynamoDBClient, UpdateItemCommand } from '@aws-sdk/client-dynamodb';
 
-const ddb = new AWS.DynamoDB.DocumentClient();
-const tableName = process.env.TABLE_NAME!;
+const ddb = new DynamoDBClient({});
+const tableName = process.env.TABLE_NAME;
+
+if (!tableName) {
+    throw new Error('TABLE_NAME environment variable is not set.');
+}
+
+const allowedMetadataTypes = new Set(['Caption', 'Date', 'Name']);
 
 export const handler = async (event: SNSEvent): Promise<void> => {
-    console.log('Received event:', JSON.stringify(event, null, 2));
+    console.log('Received SNS Event:', JSON.stringify(event, null, 2));
 
     for (const record of event.Records) {
-        const sns = record.Sns;
-        const message = JSON.parse(sns.Message);
-        const attributes = sns.MessageAttributes;
+        try {
+            const sns = record.Sns;
+            const message = JSON.parse(sns.Message);
+            const metadataType = sns.MessageAttributes?.metadata_type?.Value;
+            const imageId = message.id;
+            const metadataValue = message.value;
 
-        const imageId = message.id;
-        const value = message.value;
+            if (!metadataType || !allowedMetadataTypes.has(metadataType)) {
+                console.warn(`Skipped record due to invalid metadata_type: ${metadataType}`);
+                continue;
+            }
 
-        const metadataType = attributes['metadata_type']?.Value;
+            const command = new UpdateItemCommand({
+                TableName: tableName,
+                Key: { id: { S: imageId } },
+                UpdateExpression: 'SET #attr = :val',
+                ExpressionAttributeNames: { '#attr': metadataType },
+                ExpressionAttributeValues: { ':val': { S: metadataValue } },
+            });
 
-        if (!metadataType || !['Caption', 'Date', 'Name'].includes(metadataType)) {
-            console.error('Invalid metadata type');
-            throw new Error('Invalid metadata type');
+            await ddb.send(command);
+            console.log(`Updated ${metadataType} for image: ${imageId}`);
+
+        } catch (error) {
+            console.error('Error processing record:', record, error);
         }
-
-        const updateExpression = `set ${metadataType} = :val`;
-        const expressionAttributeValues = { ':val': value };
-
-        await ddb.update({
-            TableName: tableName,
-            Key: { id: imageId },
-            UpdateExpression: updateExpression,
-            ExpressionAttributeValues: expressionAttributeValues
-        }).promise();
-
-        console.log(`Metadata ${metadataType} updated for ${imageId}`);
     }
 };
