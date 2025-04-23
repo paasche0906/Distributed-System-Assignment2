@@ -1,43 +1,62 @@
-import { DynamoDBStreamEvent } from 'aws-lambda';
-import * as AWS from 'aws-sdk';
-import { SES_EMAIL_FROM, SES_EMAIL_TO, SES_REGION } from '../env';
+import { SNSEvent } from "aws-lambda";
+import { DynamoDBClient, GetItemCommand } from "@aws-sdk/client-dynamodb";
+import { SESClient, SendEmailCommand } from "@aws-sdk/client-ses";
+import { SES_EMAIL_FROM } from "../env";
 
-const ses = new AWS.SES({ region: SES_REGION });
+const ddb = new DynamoDBClient({});
+const ses = new SESClient({});
 
-export const handler = async (event: DynamoDBStreamEvent): Promise<void> => {
-    console.log('Received event:', JSON.stringify(event, null, 2));
+const tableName = process.env.TABLE_NAME;
+
+if (!tableName || !SES_EMAIL_FROM) {
+    throw new Error("Missing required environment variables: TABLE_NAME or SES_EMAIL_FROM");
+}
+
+export const handler = async (event: SNSEvent): Promise<void> => {
+    console.log("Received SNS Event:", JSON.stringify(event, null, 2));
 
     for (const record of event.Records) {
-        if (record.eventName !== 'MODIFY') continue;
+        try {
+            const { id, email } = JSON.parse(record.Sns.Message);
+            if (!id || !email) {
+                console.warn("⚠️ Missing required fields in SNS message:", record.Sns.Message);
+                continue;
+            }
 
-        const newImage = record.dynamodb?.NewImage;
-        const oldImage = record.dynamodb?.OldImage;
+            // Fetch status info from DynamoDB
+            const result = await ddb.send(
+                new GetItemCommand({
+                    TableName: tableName,
+                    Key: { id: { S: id } },
+                })
+            );
 
-        if (!oldImage?.status && newImage?.status) {
-            const imageId = newImage.id.S;
-            const status = newImage.status.S;
-            const photographerName = newImage.Name?.S || "Photographer";
+            const item = result.Item;
+            const status = item?.status?.S ?? "Unknown";
+            const reason = item?.reason?.S ?? "No reason provided";
+            const date = item?.date?.S ?? "Unknown";
+            const name = item?.Name?.S ?? "Photographer";
 
-            const emailParams = {
-                Source: SES_EMAIL_FROM,
-                Destination: {
-                    ToAddresses: [SES_EMAIL_TO],
-                },
-                Message: {
-                    Subject: {
-                        Data: `Image Status Update: ${status}`,
+            // Build email content
+            const subject = `Image Review Result for '${id}'`;
+            const body = `Hello ${name},\n\nYour image '${id}' has been reviewed.\n\nStatus: ${status}\nReason: ${reason}\nDate: ${date}\n\nBest regards,\nPhoto Review Team`;
+
+            // Send email
+            await ses.send(
+                new SendEmailCommand({
+                    Source: SES_EMAIL_FROM,
+                    Destination: { ToAddresses: [email] },
+                    Message: {
+                        Subject: { Data: subject },
+                        Body: { Text: { Data: body } },
                     },
-                    Body: {
-                        Text: {
-                            Data: `Hello ${photographerName},\n\nYour image '${imageId}' has been reviewed. Status: ${status}.`,
-                        },
-                    },
-                },
-            };
+                })
+            );
 
-            await ses.sendEmail(emailParams).promise();
-            console.log(`Sent email about ${imageId} status change.`);
-            console.log(`Sent email about ${imageId} status change.`);
+            console.log(`Email sent to ${email} for image: ${id}`);
+
+        } catch (error) {
+            console.error("Error processing SNS record:", record, error);
         }
     }
 };
