@@ -41,9 +41,11 @@ $ aws sns publish --topic-arn "arn:aws:sns:eu-west-1:585768165910:PhotoLibraryAp
 $ aws sns publish --topic-arn "arn:aws:sns:eu-west-1:585768165910:PhotoLibraryAppStack-MetadataTopicA4CB8975-WP94tVA2H2uT" --message file://status-message.json --message-attributes file://attributes.json
 ```
 5. Email Notification Sent
-6. SNS Filtering 
+6. SNS Filtering
+
 | Scenario         | Message Type | Triggered Lambda              |
 |------------------|--------------|-------------------------------|
-| Metadata message | `"metadata"` |  `AddMetadataFunction` only |
-| Status message   | `"status"`   |  `UpdateStatusFunction` only |
-| Notify message   | `"notify"`   |  `SendStatusEmailFunction` only |
+| Metadata message | `"metadata"` | `AddMetadataFunction` only    |
+| Status message   | `"status"`   | `UpdateStatusFunction` only   |
+| Notify message   | `"notify"`   | `SendStatusEmailFunction` only |
+
