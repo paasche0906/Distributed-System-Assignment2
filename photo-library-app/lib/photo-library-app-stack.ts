@@ -6,15 +6,12 @@ import * as sqs from 'aws-cdk-lib/aws-sqs';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as s3n from 'aws-cdk-lib/aws-s3-notifications';
 import * as events from 'aws-cdk-lib/aws-lambda-event-sources';
-import * as lambdanode from 'aws-cdk-lib/aws-lambda-nodejs';
-import * as path from "path";
-import { NodejsFunction } from "aws-cdk-lib/aws-lambda-nodejs";
-import * as subscriptions from "aws-cdk-lib/aws-sns-subscriptions";
-import { SubscriptionFilter } from "aws-cdk-lib/aws-sns";
 import * as sns from 'aws-cdk-lib/aws-sns';
-import * as lambdaNodejs from "aws-cdk-lib/aws-lambda-nodejs";
-import * as subs from "aws-cdk-lib/aws-sns-subscriptions";
-import * as iam from "aws-cdk-lib/aws-iam";
+import * as iam from 'aws-cdk-lib/aws-iam';
+import * as path from 'path';
+import { NodejsFunction } from 'aws-cdk-lib/aws-lambda-nodejs';
+import * as subs from 'aws-cdk-lib/aws-sns-subscriptions';
+import { SubscriptionFilter } from 'aws-cdk-lib/aws-sns';
 import { SES_EMAIL_FROM, SES_EMAIL_TO } from '../env';
 
 export class PhotoLibraryAppStack extends cdk.Stack {
@@ -22,19 +19,19 @@ export class PhotoLibraryAppStack extends cdk.Stack {
     super(scope, id, props);
 
     // S3 Bucket for photo uploads
-    const bucket = new s3.Bucket(this, 'PhotoGalleryBucket', {
+    const photoBucket = new s3.Bucket(this, 'PhotoGalleryBucket', {
       removalPolicy: cdk.RemovalPolicy.DESTROY,
       autoDeleteObjects: true,
     });
 
     // DynamoDB Table for photo info
-    const table = new dynamodb.Table(this, 'PhotoGalleryTable', {
+    const photoTable = new dynamodb.Table(this, 'PhotoGalleryTable', {
       partitionKey: { name: 'id', type: dynamodb.AttributeType.STRING },
       billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
       removalPolicy: cdk.RemovalPolicy.DESTROY,
     });
 
-    // SQS Queues
+    // SQS Queues (Log Queue + DLQ)
     const dlq = new sqs.Queue(this, 'ImageDLQ');
     const logQueue = new sqs.Queue(this, 'ImageLogQueue', {
       deadLetterQueue: {
@@ -43,125 +40,90 @@ export class PhotoLibraryAppStack extends cdk.Stack {
       },
     });
 
-    // Lambda - LogImage
-    const logImageFn = new lambdanode.NodejsFunction(this, 'LogImageFunction', {
-      runtime: lambda.Runtime.NODEJS_16_X,
-      entry: `${__dirname}/../lambdas/logImage.ts`,
-      handler: 'handler',
-      memorySize: 128,
-      timeout: cdk.Duration.seconds(10),
-      environment: {
-        TABLE_NAME: table.tableName,
-      },
-    });
+    // Lambda Creation Helper
+    const createNodeFunction = (
+      id: string,
+      entryFile: string,
+      environment: Record<string, string>,
+      memorySize = 128,
+      timeout = 10
+    ) =>
+      new NodejsFunction(this, id, {
+        runtime: lambda.Runtime.NODEJS_18_X,
+        entry: path.join(__dirname, entryFile),
+        handler: 'handler',
+        memorySize,
+        timeout: cdk.Duration.seconds(timeout),
+        environment,
+      });
 
-    table.grantWriteData(logImageFn);
+    // Lambda - Log Image Upload
+    const logImageFn = createNodeFunction('LogImageFunction', '../lambdas/log-image.ts', {
+      TABLE_NAME: photoTable.tableName,
+    }, 128, 10);
+    photoTable.grantWriteData(logImageFn);
     logImageFn.addEventSource(new events.SqsEventSource(logQueue));
+    photoBucket.addEventNotification(s3.EventType.OBJECT_CREATED, new s3n.SqsDestination(logQueue));
 
-    // S3 -> Send upload events to queue
-    bucket.addEventNotification(
-      s3.EventType.OBJECT_CREATED,
-      new s3n.SqsDestination(logQueue)
-    );
-
-    // Lambda - RemoveImage
-    const removeImageFn = new lambdanode.NodejsFunction(this, 'RemoveImageFunction', {
-      runtime: lambda.Runtime.NODEJS_16_X,
-      entry: `${__dirname}/../lambdas/removeImage.ts`,
-      handler: 'handler',
-      memorySize: 128,
-      timeout: cdk.Duration.seconds(10),
-      environment: {
-        BUCKET_NAME: bucket.bucketName,
-      },
-    });
-
-    bucket.grantDelete(removeImageFn);
+    // Lambda - Remove Image (from DLQ)
+    const removeImageFn = createNodeFunction('RemoveImageFunction', '../lambdas/remove-image.ts', {
+      BUCKET_NAME: photoBucket.bucketName,
+    }, 128, 10);
+    photoBucket.grantDelete(removeImageFn);
     removeImageFn.addEventSource(new events.SqsEventSource(dlq));
 
-    const addMetadataFunction = new NodejsFunction(this, "AddMetadataFunction", {
-      entry: path.join(__dirname, "../lambdas/addMetadata.ts"),
-      environment: {
-        TABLE_NAME: table.tableName,
+    // SNS Topic for metadata/status
+    const metadataTopic = new sns.Topic(this, 'MetadataTopic');
+
+    // Add Metadata Function
+    const addMetadataFn = createNodeFunction('AddMetadataFunction', '../lambdas/add-metadata.ts', {
+      TABLE_NAME: photoTable.tableName,
+    });
+    photoTable.grantWriteData(addMetadataFn);
+    metadataTopic.addSubscription(new subs.LambdaSubscription(addMetadataFn, {
+      filterPolicy: {
+        messageType: SubscriptionFilter.stringFilter({ allowlist: ['metadata'] }),
       },
+    }));
+
+    // Update Status Function
+    const updateStatusFn = createNodeFunction('UpdateStatusFunction', '../lambdas/update-status.ts', {
+      TABLE_NAME: photoTable.tableName,
     });
-
-    table.grantWriteData(addMetadataFunction);
-
-    // SNS Topic for metadata updates
-    const snsTopic = new sns.Topic(this, 'MetadataTopic');
-
-    snsTopic.addSubscription(
-      new subscriptions.LambdaSubscription(addMetadataFunction, {
-        filterPolicy: {
-          messageType: SubscriptionFilter.stringFilter({
-            allowlist: ["metadata"],
-          }),
-        },
-      })
-    );
-
-    const updateStatusFunction = new NodejsFunction(this, "UpdateStatusFunction", {
-      entry: path.join(__dirname, "../lambdas/updateStatus.ts"),
-      environment: {
-        TABLE_NAME: table.tableName
+    photoTable.grantWriteData(updateStatusFn);
+    metadataTopic.addSubscription(new subs.LambdaSubscription(updateStatusFn, {
+      filterPolicy: {
+        messageType: SubscriptionFilter.stringFilter({ allowlist: ['status'] }),
       },
+    }));
+
+    // Email Notification SNS + Lambda
+    const mailerTopic = new sns.Topic(this, 'MailerTopic', {
+      displayName: 'Notify Photographer of Status Update',
     });
 
-    table.grantWriteData(updateStatusFunction);
-
-    snsTopic.addSubscription(
-      new subscriptions.LambdaSubscription(updateStatusFunction, {
-        filterPolicy: {
-          messageType: SubscriptionFilter.stringFilter({
-            allowlist: ["status"],
-          }),
-        },
-      })
-    );
-
-    // Create an email notification SNS Topic
-    const mailerTopic = new sns.Topic(this, "MailerTopic", {
-      displayName: "Notify Photographer of Status Update",
-    });
-
-    // Create an Emailing Lambda Function
-    const mailerFunction = new lambdaNodejs.NodejsFunction(this, "SendStatusEmailFunction", {
-      entry: path.join(__dirname, "../lambdas/sendEmail.ts"),
-      handler: "handler",
-      runtime: lambda.Runtime.NODEJS_18_X,
-      memorySize: 1024,
-      timeout: cdk.Duration.seconds(5),
-      environment: {
-        TABLE_NAME: table.tableName,
-        SENDER_EMAIL: SES_EMAIL_FROM,
-        RECIPIENT_EMAIL: SES_EMAIL_TO,
-      },
-    });
-
-
-    mailerTopic.addSubscription(new subs.LambdaSubscription(mailerFunction));
-    mailerTopic.addSubscription(
-      new subs.LambdaSubscription(mailerFunction, {
-        filterPolicy: {
-          messageType: sns.SubscriptionFilter.stringFilter({
-            allowlist: ["notify"],
-          }),
-        },
-      })
-    );
-
-    // Permission settings: Mailer Lambda can read tables and send emails
-    table.grantReadData(mailerFunction);
-    mailerFunction.addToRolePolicy(
+    const mailerFn = createNodeFunction('SendStatusEmailFunction', '../lambdas/status-update-mailer.ts', {
+      TABLE_NAME: photoTable.tableName,
+      SENDER_EMAIL: SES_EMAIL_FROM,
+      RECIPIENT_EMAIL: SES_EMAIL_TO,
+    }, 1024, 5);
+    photoTable.grantReadData(mailerFn);
+    mailerFn.addToRolePolicy(
       new iam.PolicyStatement({
-        actions: ["ses:SendEmail"],
-        resources: ["*"],
+        actions: ['ses:SendEmail'],
+        resources: ['*'],
       })
     );
 
-    // Enable updateStatusFunction to publish SNS messages
-    mailerTopic.grantPublish(updateStatusFunction);
-    updateStatusFunction.addEnvironment("MAILER_TOPIC_ARN", mailerTopic.topicArn);
+    mailerTopic.addSubscription(new subs.LambdaSubscription(mailerFn));
+    mailerTopic.addSubscription(new subs.LambdaSubscription(mailerFn, {
+      filterPolicy: {
+        messageType: SubscriptionFilter.stringFilter({ allowlist: ['notify'] }),
+      },
+    }));
+
+    // Enable status function to publish to mailer topic
+    mailerTopic.grantPublish(updateStatusFn);
+    updateStatusFn.addEnvironment('MAILER_TOPIC_ARN', mailerTopic.topicArn);
   }
 }
