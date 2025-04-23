@@ -26,11 +26,11 @@ __Feature:__
 ### Testing Steps 
 1. Upload Valid Image
 ```bash
-$ aws s3 cp ./testfiles/sunflower.jpeg s3://photolibraryappstack-photogallerybucket51200357-tt1imfqtxnoasd
+$ aws s3 cp ./testfiles/sunflower.jpeg s3://photolibraryappstack-photogallerybucket51200357-tt1imfqtxnoa
 ```
 2. Upload Invalid Image
 ```bash
-$ aws s3 cp ./testfiles/arch.jpg s3://photolibraryappstack-photogallerybucket51200357-tt1imfqtxnoasd
+$ aws s3 cp ./testfiles/arch.jpg s3://photolibraryappstack-photogallerybucket51200357-tt1imfqtxnoa
 ```
 3. Add Metadata
 ```bash
