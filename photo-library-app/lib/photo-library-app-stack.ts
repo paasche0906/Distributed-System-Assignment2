@@ -58,7 +58,7 @@ export class PhotoLibraryAppStack extends cdk.Stack {
       });
 
     // Lambda - Log Image Upload
-    const logImageFn = createNodeFunction('LogImageFunction', '../lambdas/log-image.ts', {
+    const logImageFn = createNodeFunction('LogImageFunction', '../lambda/log-image.ts', {
       TABLE_NAME: photoTable.tableName,
     }, 128, 10);
     photoTable.grantWriteData(logImageFn);
@@ -66,7 +66,7 @@ export class PhotoLibraryAppStack extends cdk.Stack {
     photoBucket.addEventNotification(s3.EventType.OBJECT_CREATED, new s3n.SqsDestination(logQueue));
 
     // Lambda - Remove Image (from DLQ)
-    const removeImageFn = createNodeFunction('RemoveImageFunction', '../lambdas/remove-image.ts', {
+    const removeImageFn = createNodeFunction('RemoveImageFunction', '../lambda/remove-image.ts', {
       BUCKET_NAME: photoBucket.bucketName,
     }, 128, 10);
     photoBucket.grantDelete(removeImageFn);
@@ -76,7 +76,7 @@ export class PhotoLibraryAppStack extends cdk.Stack {
     const metadataTopic = new sns.Topic(this, 'MetadataTopic');
 
     // Add Metadata Function
-    const addMetadataFn = createNodeFunction('AddMetadataFunction', '../lambdas/add-metadata.ts', {
+    const addMetadataFn = createNodeFunction('AddMetadataFunction', '../lambda/add-metadata.ts', {
       TABLE_NAME: photoTable.tableName,
     });
     photoTable.grantWriteData(addMetadataFn);
@@ -87,7 +87,7 @@ export class PhotoLibraryAppStack extends cdk.Stack {
     }));
 
     // Update Status Function
-    const updateStatusFn = createNodeFunction('UpdateStatusFunction', '../lambdas/update-status.ts', {
+    const updateStatusFn = createNodeFunction('UpdateStatusFunction', '../lambda/update-status.ts', {
       TABLE_NAME: photoTable.tableName,
     });
     photoTable.grantWriteData(updateStatusFn);
@@ -102,7 +102,7 @@ export class PhotoLibraryAppStack extends cdk.Stack {
       displayName: 'Notify Photographer of Status Update',
     });
 
-    const mailerFn = createNodeFunction('SendStatusEmailFunction', '../lambdas/status-update-mailer.ts', {
+    const mailerFn = createNodeFunction('SendStatusEmailFunction', '../lambda/status-update-mailer.ts', {
       TABLE_NAME: photoTable.tableName,
       SENDER_EMAIL: SES_EMAIL_FROM,
       RECIPIENT_EMAIL: SES_EMAIL_TO,
@@ -115,7 +115,6 @@ export class PhotoLibraryAppStack extends cdk.Stack {
       })
     );
 
-    mailerTopic.addSubscription(new subs.LambdaSubscription(mailerFn));
     mailerTopic.addSubscription(new subs.LambdaSubscription(mailerFn, {
       filterPolicy: {
         messageType: SubscriptionFilter.stringFilter({ allowlist: ['notify'] }),
